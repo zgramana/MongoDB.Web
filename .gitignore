@@ -1,4 +1,14 @@
-
+_ReSharper.*
+*/bin
+*/obj
+*.resharper.user
 *.suo
-/MongoDB.Web/obj
-/MongoDB.Web/bin
+*.bak
+*.sln.cache
+*.user
+*.zip
+*.chm
+*.nupkg
+Help/*
+build/*
+nuget/*
