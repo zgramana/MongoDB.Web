@@ -4,6 +4,10 @@
 NuGet Package: http://nuget.org/List/Packages/MongoDB.Web
 
 ## Configuration
+
+Read more on using appconfig settings here:
+https://github.com/osuritz/MongoDB.Web/commit/b1e9534023ca8cb2e74eb1adbdcb1cd7dd693efa
+
 To use MongoDB.Web, add the providers you're interested in to your Web.config file:
 
     <system.web>
@@ -59,6 +63,3 @@ To use MongoDB.Web, add the providers you're interested in to your Web.config fi
             </providers>
         </sessionState>
     </system.web>
-    
-    Read more on using appconfig here:
-    https://github.com/osuritz/MongoDB.Web/commit/b1e9534023ca8cb2e74eb1adbdcb1cd7dd693efa
