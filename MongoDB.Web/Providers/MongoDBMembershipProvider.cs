@@ -157,7 +157,7 @@ namespace MongoDB.Web.Providers
                 return null;
             }
 
-            if(this.GetUser(providerUserKey, false) != null)
+            if (this.GetUser(providerUserKey, false) != null)
             {
                 status = MembershipCreateStatus.DuplicateProviderUserKey;
                 return null;
@@ -270,7 +270,7 @@ namespace MongoDB.Web.Providers
             var query = Query.And(Query.EQ("ApplicationName", this.ApplicationName), Query.EQ("Username", username));
             var bsonDocument = this.mongoCollection.FindOneAs<BsonDocument>(query);
 
-            if(this.RequiresQuestionAndAnswer && !this.VerifyPasswordAnswer(bsonDocument, answer))
+            if (this.RequiresQuestionAndAnswer && !this.VerifyPasswordAnswer(bsonDocument, answer))
             {
                 throw new MembershipPasswordException("The password-answer supplied is invalid.");
             }
@@ -367,7 +367,7 @@ namespace MongoDB.Web.Providers
 
             var password = Membership.GeneratePassword(this.MinRequiredPasswordLength, this.MinRequiredNonAlphanumericCharacters);
             var update = Update.Set("LastPasswordChangedDate", DateTime.UtcNow).Set("Password", this.EncodePassword(password, this.PasswordFormat, bsonDocument["Salt"].AsString));
-
+            mongoCollection.Update(query, update);
             return password;
         }
 
