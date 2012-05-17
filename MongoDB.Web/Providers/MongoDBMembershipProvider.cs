@@ -206,7 +206,8 @@ namespace MongoDB.Web.Providers
         public override bool DeleteUser(string username, bool deleteAllRelatedData)
         {
             var query = Query.And(Query.EQ("ApplicationName", this.ApplicationName), Query.EQ("Username", username));
-            return this.mongoCollection.Remove(query).Ok;
+            this.mongoCollection.Remove(query);
+            return true;
         }
 
         public override MembershipUserCollection FindUsersByEmail(string emailToMatch, int pageIndex, int pageSize, out int totalRecords)
