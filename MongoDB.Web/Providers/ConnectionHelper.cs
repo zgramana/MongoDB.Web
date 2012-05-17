@@ -18,8 +18,8 @@ namespace MongoDB.Web.Providers
 
             if (string.IsNullOrWhiteSpace(connectionString))
             {
-                string appSettingsKey = config["appSettingsConnectionStringKey"];
-                connectionString = string.IsNullOrWhiteSpace(appSettingsKey) ? "mongodb://localhost" : ConfigurationManager.AppSettings[appSettingsKey];
+                string appSettingsKey = config["connectionStringKey"];
+                connectionString = string.IsNullOrWhiteSpace(appSettingsKey) ? "mongodb://localhost" : ConfigurationManager.ConnectionStrings[appSettingsKey].ConnectionString;
             }
 
             return connectionString;
