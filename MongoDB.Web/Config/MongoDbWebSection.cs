@@ -14,11 +14,17 @@ namespace MongoDB.Web.Config
 		public string ConnectionString { get; set; }
 		[ConfigurationProperty("databaseName", DefaultValue = "ASPNETDB")]
 		public string DatabaseName { get; set; }
+		[ConfigurationProperty("sessionState")]
+		public MongoDbSessionStateSection SessionState { get; set; }
+	}
+
+	class MongoDbSessionStateSection : AutoConfigurationElement
+	{
 		[ConfigurationProperty("mongoCollectionName", DefaultValue = "SessionState")]
 		public string MongoCollectionName { get; set; }
-		[ConfigurationProperty("cacheExpireSeconds", DefaultValue = 100)]
-		public int CacheExpireSeconds { get; set; }
-		[ConfigurationProperty("maxCachedSessions", DefaultValue = 10000L)]
-		public long MaxCachedSessions { get; set; }
+		[ConfigurationProperty("memoryCacheExpireSeconds", DefaultValue = 100)]
+		public int MemoryCacheExpireSeconds { get; set; }
+		[ConfigurationProperty("maxInMemoryCachedSessions", DefaultValue = 10000L)]
+		public long MaxInMemoryCachedSessions { get; set; }
 	}
 }

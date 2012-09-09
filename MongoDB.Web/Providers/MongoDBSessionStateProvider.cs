@@ -1,12 +1,16 @@
 ﻿using System;
 using System.Collections.Specialized;
+using System.Configuration;
 using System.IO;
+using System.Linq.Expressions;
 using System.Web;
 using System.Web.Configuration;
 using System.Web.Hosting;
 using System.Web.SessionState;
 
+using System.Linq.Expressions;
 using MongoDB.Web.Config;
+using MongoDB.Web.Common;
 
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
@@ -79,6 +83,7 @@ namespace MongoDB.Web.Providers
 		private BsonClassMap<T> _SessionDataClassMap;
 		private static Cache<string, T> _Cache;
 		private static object _CacheGuarantee = new object();
+		private static MemberHelper<T> _MemberHelper = new MemberHelper<T>();
 
 		private BsonMemberMap _IdField;
 		private BsonMemberMap _AppPathField;
@@ -120,25 +125,24 @@ namespace MongoDB.Web.Providers
 
         public override void Initialize(string name, NameValueCollection config)
         {
-            var configuration = WebConfigurationManager.OpenWebConfiguration(HostingEnvironment.ApplicationVirtualPath);
-            this._SessionStateSection = configuration.GetSection("system.web/sessionState") as SessionStateSection;
-			this._MongoWebSection = configuration.GetSection("mongoDbWeb") as MongoDbWebSection;
+            this._SessionStateSection = ConfigurationManager.GetSection("system.web/sessionState") as SessionStateSection;
+			this._MongoWebSection = ConfigurationManager.GetSection("mongoDbWeb") as MongoDbWebSection;
 
-			this._MongoCollection = MongoServer.Create(ConnectionHelper.GetDatabaseConnectionString(config))
-				.GetDatabase(config["database"] ?? _MongoWebSection.DatabaseName)
-				.GetCollection<T>(config["collection"] ?? _MongoWebSection.MongoCollectionName);
+			this._MongoCollection = MongoServer.Create(ConnectionHelper.GetDatabaseConnectionString(_MongoWebSection, config))
+				.GetDatabase(ConnectionHelper.GetDatabaseName(_MongoWebSection, config))
+				.GetCollection<T>(config["collection"] ?? _MongoWebSection.SessionState.MongoCollectionName);
 
 			_SessionDataClassMap = new BsonClassMap<T>();
 			_SessionDataClassMap.AutoMap();
-			_IdField = _SessionDataClassMap.MapMember(t => t.Id);
-			_AppPathField = _SessionDataClassMap.MapMember(t => t.ApplicationVirtualPath);
-			_LockIdField = _SessionDataClassMap.MapMember(t => t.LockId);
-			_LockedField = _SessionDataClassMap.MapMember(t => t.Locked);
-			_ExpiresField = _SessionDataClassMap.MapMember(t => t.Expires);
-			_ItemsField = _SessionDataClassMap.MapMember(t => t.SessionStateItems);
-			_ItemsCountField = _SessionDataClassMap.MapMember(t => t.SessionStateItemsCount);
-			_LockDateField = _SessionDataClassMap.MapMember(t => t.LockDate);
-			_SessionStateActionsField = _SessionDataClassMap.MapMember(t => t.SessionStateActions);
+			_IdField = MapBsonMember(t => t.Id);
+			_AppPathField = MapBsonMember(t => t.ApplicationVirtualPath);
+			_LockIdField = MapBsonMember(t => t.LockId);
+			_LockedField = MapBsonMember(t => t.Locked);
+			_ExpiresField = MapBsonMember(t => t.Expires);
+			_ItemsField = MapBsonMember(t => t.SessionStateItems);
+			_ItemsCountField = MapBsonMember(t => t.SessionStateItemsCount);
+			_LockDateField = MapBsonMember(t => t.LockDate);
+			_SessionStateActionsField = MapBsonMember(t => t.SessionStateActions);
 
             this._MongoCollection.EnsureIndex(_AppPathField.ElementName, _IdField.ElementName, _LockIdField.ElementName);
 
@@ -150,8 +154,8 @@ namespace MongoDB.Web.Providers
 					{
 						_Cache = new Cache<string, T>.Builder()
 						{
-							EntryExpiration = new TimeSpan(0, 0, _MongoWebSection.CacheExpireSeconds),
-							MaxEntries = _MongoWebSection.MaxCachedSessions
+							EntryExpiration = new TimeSpan(0, 0, _MongoWebSection.SessionState.MemoryCacheExpireSeconds),
+							MaxEntries = _MongoWebSection.SessionState.MaxInMemoryCachedSessions
 						}.Cache;
 					}
 				}
@@ -166,7 +170,6 @@ namespace MongoDB.Web.Providers
 
         public override void ReleaseItemExclusive(HttpContext context, string id, object lockId)
         {
-			this._SessionDataClassMap.MapMember(t => t.Id);
 			var query = LookupQuery(id, lockId);
 
 			var newExpires = DateTime.UtcNow.Add(_SessionStateSection.Timeout);
@@ -339,6 +342,11 @@ namespace MongoDB.Web.Providers
 				Query.EQ(_AppPathField.ElementName, HostingEnvironment.ApplicationVirtualPath),
 				Query.EQ(_IdField.ElementName, id),
 				Query.EQ(_LockIdField.ElementName, lockId.ToString()));
+		}
+
+		private BsonMemberMap MapBsonMember<TReturn>(Expression<Func<T, TReturn>> expression)
+		{
+			return _SessionDataClassMap.MapMember(_MemberHelper.GetMember(expression));
 		}
 
         #endregion
