@@ -1,20 +1,99 @@
 ﻿using System;
 using System.Collections.Specialized;
+using System.Configuration;
 using System.IO;
+using System.Linq.Expressions;
 using System.Web;
 using System.Web.Configuration;
 using System.Web.Hosting;
 using System.Web.SessionState;
+
+using System.Linq.Expressions;
+using MongoDB.Web.Config;
+using MongoDB.Web.Common;
+
 using MongoDB.Bson;
+using MongoDB.Bson.Serialization;
+using MongoDB.Bson.Serialization.Attributes;
 using MongoDB.Driver;
 using MongoDB.Driver.Builders;
 
+using CommonCore.Cache;
+
 namespace MongoDB.Web.Providers
 {
-    public class MongoDBSessionStateProvider : SessionStateStoreProviderBase
+	public interface ISessionStateData
+	{
+		string ApplicationVirtualPath { get; set; }
+		DateTime Created { get; set; }
+		DateTime Expires { get; set; }
+		string Id { get; set; }
+		DateTime LockDate { get; set; }
+		bool Locked { get; set; }
+		int LockId { get; set; }
+		SessionStateActions SessionStateActions { get; set; }
+		byte[] SessionStateItems { get; set; }
+		int SessionStateItemsCount { get; set; }
+		int Timeout { get; set; }
+	}
+
+	public class DefaultSessionStateData : ISessionStateData
+	{
+		[BsonElement("applicationVirtualPath")]
+		public string ApplicationVirtualPath { get; set; }
+
+		[BsonElement("created")]
+		public DateTime Created { get; set; }
+
+		[BsonElement("expires")]
+		public DateTime Expires { get; set; }
+
+		[BsonElement("id")]
+		[BsonId]
+		public string Id { get; set; }
+
+		[BsonElement("lockDate")]
+		public DateTime LockDate { get; set; }
+
+		[BsonElement("locked")]
+		public bool Locked { get; set; }
+
+		[BsonElement("lockId")]
+		public int LockId { get; set; }
+
+		[BsonElement("sessionStateActions")]
+		public SessionStateActions SessionStateActions { get; set; }
+
+		[BsonElement("sessionStateItems")]
+		public byte[] SessionStateItems { get; set; }
+
+		[BsonElement("sessionStateItemsCount")]
+		public int SessionStateItemsCount { get; set; }
+
+		[BsonElement("timeout")]
+		public int Timeout { get; set; }
+	}
+
+	public class MongoSessionStateProvider<T> : SessionStateStoreProviderBase
+		where T : ISessionStateData, new()
     {
-        private MongoCollection mongoCollection;
-        private SessionStateSection sessionStateSection;
+		private MongoCollection<T> _MongoCollection;
+        private SessionStateSection _SessionStateSection;
+		private MongoDbWebSection _MongoWebSection;
+		private BsonClassMap<T> _SessionDataClassMap;
+		private static Cache<string, T> _Cache;
+		private static object _CacheGuarantee = new object();
+		private static MemberHelper<T> _MemberHelper = new MemberHelper<T>();
+
+		private BsonMemberMap _IdField;
+		private BsonMemberMap _AppPathField;
+		private BsonMemberMap _LockIdField;
+		private BsonMemberMap _LockedField;
+		private BsonMemberMap _ExpiresField;
+		private BsonMemberMap _ItemsField;
+		private BsonMemberMap _ItemsCountField;
+		private BsonMemberMap _SessionStateActionsField;
+		private BsonMemberMap _LockDateField;
 
         public override SessionStateStoreData CreateNewStoreData(HttpContext context, int timeout)
         {
@@ -46,12 +125,41 @@ namespace MongoDB.Web.Providers
 
         public override void Initialize(string name, NameValueCollection config)
         {
-            var configuration = WebConfigurationManager.OpenWebConfiguration(HostingEnvironment.ApplicationVirtualPath);
-            this.sessionStateSection = configuration.GetSection("system.web/sessionState") as SessionStateSection;
+            this._SessionStateSection = ConfigurationManager.GetSection("system.web/sessionState") as SessionStateSection;
+			this._MongoWebSection = ConfigurationManager.GetSection("mongoDbWeb") as MongoDbWebSection;
 
-            this.mongoCollection = MongoServer.Create(ConnectionHelper.GetDatabaseConnectionString(config)).GetDatabase(config["database"] ?? "ASPNETDB").GetCollection(config["collection"] ?? "SessionState");
-            this.mongoCollection.EnsureIndex("applicationVirtualPath", "id");
-            this.mongoCollection.EnsureIndex("applicationVirtualPath", "id", "lockId");
+			this._MongoCollection = MongoServer.Create(ConnectionHelper.GetDatabaseConnectionString(_MongoWebSection, config))
+				.GetDatabase(ConnectionHelper.GetDatabaseName(_MongoWebSection, config))
+				.GetCollection<T>(config["collection"] ?? _MongoWebSection.SessionState.MongoCollectionName);
+
+			_SessionDataClassMap = new BsonClassMap<T>();
+			_SessionDataClassMap.AutoMap();
+			_IdField = MapBsonMember(t => t.Id);
+			_AppPathField = MapBsonMember(t => t.ApplicationVirtualPath);
+			_LockIdField = MapBsonMember(t => t.LockId);
+			_LockedField = MapBsonMember(t => t.Locked);
+			_ExpiresField = MapBsonMember(t => t.Expires);
+			_ItemsField = MapBsonMember(t => t.SessionStateItems);
+			_ItemsCountField = MapBsonMember(t => t.SessionStateItemsCount);
+			_LockDateField = MapBsonMember(t => t.LockDate);
+			_SessionStateActionsField = MapBsonMember(t => t.SessionStateActions);
+
+            this._MongoCollection.EnsureIndex(_AppPathField.ElementName, _IdField.ElementName, _LockIdField.ElementName);
+
+			if (_Cache == null)
+			{
+				lock (_CacheGuarantee)
+				{
+					if (_Cache == null)
+					{
+						_Cache = new Cache<string, T>.Builder()
+						{
+							EntryExpiration = new TimeSpan(0, 0, _MongoWebSection.SessionState.MemoryCacheExpireSeconds),
+							MaxEntries = _MongoWebSection.SessionState.MaxInMemoryCachedSessions
+						}.Cache;
+					}
+				}
+			}
 
             base.Initialize(name, config);
         }
@@ -62,22 +170,43 @@ namespace MongoDB.Web.Providers
 
         public override void ReleaseItemExclusive(HttpContext context, string id, object lockId)
         {
-            var query = Query.And(Query.EQ("applicationVirtualPath", HostingEnvironment.ApplicationVirtualPath), Query.EQ("id", id), Query.EQ("lockId", lockId.ToString()));
-            var update = Update.Set("expires", DateTime.Now.Add(sessionStateSection.Timeout)).Set("locked", false);
-            this.mongoCollection.Update(query, update);
+			var query = LookupQuery(id, lockId);
+
+			var newExpires = DateTime.UtcNow.Add(_SessionStateSection.Timeout);
+			T session;
+			if (_Cache.TryGetValue(id, out session))
+			{
+				lock (session)
+				{
+					session.Expires = newExpires;
+					session.Locked = false;
+				}
+			}
+			var update = Update.Set(_ExpiresField.ElementName, newExpires).Set(_LockedField.ElementName, false);
+            this._MongoCollection.Update(query, update);
         }
 
         public override void RemoveItem(HttpContext context, string id, object lockId, SessionStateStoreData item)
         {
-            var query = Query.And(Query.EQ("applicationVirtualPath", HostingEnvironment.ApplicationVirtualPath), Query.EQ("id", id), Query.EQ("lockId", lockId.ToString()));
-            this.mongoCollection.Remove(query);
+			this._MongoCollection.Remove(LookupQuery(id, lockId));
+			_Cache.Remove(id);
         }
 
         public override void ResetItemTimeout(HttpContext context, string id)
         {
-            var query = Query.And(Query.EQ("applicationVirtualPath", HostingEnvironment.ApplicationVirtualPath), Query.EQ("id", id));
-            var update = Update.Set("expires", DateTime.Now.Add(sessionStateSection.Timeout));
-            this.mongoCollection.Update(query, update);
+			var query = LookupQuery(id);
+
+			var newExpires = DateTime.UtcNow.Add(_SessionStateSection.Timeout);
+			T session;
+			if (_Cache.TryGetValue(id, out session))
+			{
+				lock (session)
+				{
+					session.Expires = newExpires;
+				}
+			}
+			var update = Update.Set(_ExpiresField.ElementName, newExpires);
+            this._MongoCollection.Update(query, update);
         }
 
         public override void SetAndReleaseItemExclusive(HttpContext context, string id, SessionStateStoreData item, object lockId, bool newItem)
@@ -88,34 +217,33 @@ namespace MongoDB.Web.Providers
                 {
                     ((SessionStateItemCollection)item.Items).Serialize(binaryWriter);
 
-                    if (newItem)
-                    {
-                        var query = Query.And(Query.EQ("applicationVirtualPath", HostingEnvironment.ApplicationVirtualPath), Query.EQ("id", id));
-                        this.mongoCollection.Remove(query);
-
-                        var bsonDocument = new BsonDocument
-                        {
-                            { "applicationVirtualPath", HostingEnvironment.ApplicationVirtualPath },
-                            { "created", DateTime.Now },
-                            { "expires", DateTime.Now.AddMinutes(item.Timeout) },
-                            { "id", id },
-                            { "lockDate", DateTime.Now },
-                            { "locked", false },
-                            { "lockId", 0 },
-                            { "sessionStateActions", SessionStateActions.None },
-                            { "sessionStateItems", memoryStream.ToArray() },
-                            { "sessionStateItemsCount", item.Items.Count },
-                            { "timeout", item.Timeout }
-                        };
-
-                        this.mongoCollection.Insert(bsonDocument);
-                    }
+					var sessionData = new T()
+					{
+						ApplicationVirtualPath = HostingEnvironment.ApplicationVirtualPath,
+						Created = DateTime.UtcNow,
+						Expires = DateTime.UtcNow.AddMinutes(item.Timeout),
+						Id = id,
+						LockDate = DateTime.UtcNow,
+						Locked = false,
+						LockId = 0,
+						SessionStateActions = SessionStateActions.None,
+						SessionStateItems = memoryStream.ToArray(),
+						SessionStateItemsCount = item.Items.Count,
+						Timeout = item.Timeout
+					};
+                    if (newItem || (lockId == null))
+                        this._MongoCollection.Save(sessionData);
                     else
                     {
-                        var query = Query.And(Query.EQ("applicationVirtualPath", HostingEnvironment.ApplicationVirtualPath), Query.EQ("id", id), Query.EQ("lockId", lockId.ToString()));
-                        var upate = Update.Set("expires", DateTime.Now.Add(this.sessionStateSection.Timeout)).Set("items", memoryStream.ToArray()).Set("locked", false).Set("sessionStateItemsCount", item.Items.Count);
-                        this.mongoCollection.Update(query, upate);
+						var query = LookupQuery(id, lockId);
+                        var update = Update.Set(_ExpiresField.ElementName, sessionData.Expires)
+							.Set(_ItemsField.ElementName, sessionData.SessionStateItems)
+							.Set(_LockedField.ElementName, sessionData.Locked)
+							.Set(_ItemsCountField.ElementName, sessionData.SessionStateItemsCount);
+                        this._MongoCollection.Update(query, update);
                     }
+
+					_Cache[id] = sessionData;
                 }
             }
         }
@@ -134,59 +262,97 @@ namespace MongoDB.Web.Providers
             locked = false;
             lockId = null;
 
-            var query = Query.And(Query.EQ("applicationVirtualPath", HostingEnvironment.ApplicationVirtualPath), Query.EQ("id", id));
-            var bsonDocument = this.mongoCollection.FindOneAs<BsonDocument>(query);
+			var lookupQuery = LookupQuery(id);
+			T session;
+			if (!_Cache.TryGetValue(id, out session))
+			{
+				session = this._MongoCollection.FindOneAs<T>(lookupQuery);
+				if (session != null)
+					_Cache[id] = session;
+			}
 
-            if (bsonDocument == null)
+            if (session == null)
             {
                 locked = false;
             }
-            else if (bsonDocument["expires"].AsDateTime <= DateTime.Now)
+            else if (session.Expires <= DateTime.UtcNow)
             {
                 locked = false;
-                this.mongoCollection.Remove(Query.And(Query.EQ("applicationVirtualPath", HostingEnvironment.ApplicationVirtualPath), Query.EQ("id", id)));
+				this._MongoCollection.Remove(lookupQuery);
+				_Cache.Remove(session.Id);
             }
-            else if (bsonDocument["locked"].AsBoolean == true)
+            else if (session.Locked)
             {
-                lockAge = DateTime.Now.Subtract(bsonDocument["lockDate"].AsDateTime);
+                lockAge = DateTime.UtcNow.Subtract(session.LockDate);
                 locked = true;
-                lockId = bsonDocument["lockId"].AsInt32;
+                lockId = session.LockId;
             }
             else
             {
                 locked = false;
-                lockId = bsonDocument["lockId"].AsInt32;
-                actions = (SessionStateActions)bsonDocument["sessionStateActions"].AsInt32;
+                lockId = session.LockId;
+				actions = session.SessionStateActions;
             }
 
-            if (exclusive)
+            if (exclusive && (session != null))
             {
-                lockId = (int)lockId + 1;
                 actions = SessionStateActions.None;
 
-                var update = Update.Set("lockDate", DateTime.Now).Set("lockId", (int)lockId).Set("locked", true).Set("sessionStateActions", SessionStateActions.None);
-                this.mongoCollection.Update(query, update);
+				lock (session)
+				{
+					session.LockDate = DateTime.UtcNow;
+					session.LockId++;
+					session.Locked = true;
+					session.SessionStateActions = SessionStateActions.None;
+				}
+
+				var update = Update.Set(_LockDateField.ElementName, session.LockDate)
+					.Set(_LockIdField.ElementName, session.LockId)
+					.Set(_LockedField.ElementName, session.Locked)
+					.Set(_SessionStateActionsField.ElementName, session.SessionStateActions);
+                this._MongoCollection.Update(lookupQuery, update);
             }
 
-            if (actions == SessionStateActions.InitializeItem)
+            if ((actions == SessionStateActions.InitializeItem) || (session == null))
             {
-                return CreateNewStoreData(context, sessionStateSection.Timeout.Minutes);
+                return CreateNewStoreData(context, _SessionStateSection.Timeout.Minutes);
             }
 
-            using (var memoryStream = new MemoryStream(bsonDocument["sessionStateItems"].AsByteArray))
+            using (var memoryStream = new MemoryStream(session.SessionStateItems))
             {
                 var sessionStateItems = new SessionStateItemCollection();
 
                 if (memoryStream.Length > 0)
-                {
-                    var binaryReader = new BinaryReader(memoryStream);
-                    sessionStateItems = SessionStateItemCollection.Deserialize(binaryReader);
-                }
+                    sessionStateItems = SessionStateItemCollection.Deserialize(new BinaryReader(memoryStream));
 
-                return new SessionStateStoreData(sessionStateItems, SessionStateUtility.GetSessionStaticObjects(context), bsonDocument["timeout"].AsInt32);
+                return new SessionStateStoreData(sessionStateItems, SessionStateUtility.GetSessionStaticObjects(context), session.Timeout);
             }
         }
 
+		private IMongoQuery LookupQuery (string id)
+		{
+			return Query.And(
+				Query.EQ(_AppPathField.ElementName, HostingEnvironment.ApplicationVirtualPath),
+				Query.EQ(_IdField.ElementName, id));
+		}
+
+		private IMongoQuery LookupQuery(string id, object lockId)
+		{
+			return Query.And(
+				Query.EQ(_AppPathField.ElementName, HostingEnvironment.ApplicationVirtualPath),
+				Query.EQ(_IdField.ElementName, id),
+				Query.EQ(_LockIdField.ElementName, lockId.ToString()));
+		}
+
+		private BsonMemberMap MapBsonMember<TReturn>(Expression<Func<T, TReturn>> expression)
+		{
+			return _SessionDataClassMap.MapMember(_MemberHelper.GetMember(expression));
+		}
+
         #endregion
     }
+
+	public class MongoDBSessionStateProvider : MongoSessionStateProvider<DefaultSessionStateData>
+	{
+	}
 }
