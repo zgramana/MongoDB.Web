@@ -347,6 +347,7 @@ namespace MongoDB.Web.Providers
             this.mongoCollection.EnsureIndex("ApplicationName");
             this.mongoCollection.EnsureIndex("ApplicationName", "Email");
             this.mongoCollection.EnsureIndex("ApplicationName", "Username");
+            this.mongoCollection.EnsureIndex(IndexKeys.Ascending("ApplicationName", "Username"), IndexOptions.SetUnique(true).SetName("UniqueApplicationNameUserName"));
 
             base.Initialize(name, config);
         }
