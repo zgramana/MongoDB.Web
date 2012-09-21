@@ -8,7 +8,6 @@ using System.Web.Configuration;
 using System.Web.Hosting;
 using System.Web.SessionState;
 
-using System.Linq.Expressions;
 using MongoDB.Web.Config;
 using MongoDB.Web.Common;
 
@@ -39,6 +38,9 @@ namespace MongoDB.Web.Providers
 
 	public class DefaultSessionStateData : ISessionStateData
 	{
+		[BsonElement("id")]
+		public string Id { get; set; }
+
 		[BsonElement("applicationVirtualPath")]
 		public string ApplicationVirtualPath { get; set; }
 
@@ -47,10 +49,6 @@ namespace MongoDB.Web.Providers
 
 		[BsonElement("expires")]
 		public DateTime Expires { get; set; }
-
-		[BsonElement("id")]
-		[BsonId]
-		public string Id { get; set; }
 
 		[BsonElement("lockDate")]
 		public DateTime LockDate { get; set; }
@@ -144,7 +142,8 @@ namespace MongoDB.Web.Providers
 			_LockDateField = MapBsonMember(t => t.LockDate);
 			_SessionStateActionsField = MapBsonMember(t => t.SessionStateActions);
 
-            this._MongoCollection.EnsureIndex(_AppPathField.ElementName, _IdField.ElementName, _LockIdField.ElementName);
+			this._MongoCollection.EnsureIndex(
+				IndexKeys.Ascending(_AppPathField.ElementName, _IdField.ElementName), IndexOptions.SetUnique(true));
 
 			if (_Cache == null)
 			{
