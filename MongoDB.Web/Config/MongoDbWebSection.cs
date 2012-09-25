@@ -14,6 +14,12 @@ namespace MongoDB.Web.Config
 		public string ConnectionString { get; set; }
 		[ConfigurationProperty("databaseName", DefaultValue = "ASPNETDB")]
 		public string DatabaseName { get; set; }
+
+		[ConfigurationProperty("fsync", DefaultValue = false)]
+		public bool FSync { get; set; }
+		[ConfigurationProperty("replicasToWrite", DefaultValue = 0)]
+		public int ReplicasToWrite { get; set; }
+
 		[ConfigurationProperty("sessionState")]
 		public MongoDbSessionStateSection SessionState { get; set; }
 	}

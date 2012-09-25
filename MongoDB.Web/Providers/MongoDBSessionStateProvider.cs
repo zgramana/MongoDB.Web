@@ -1,6 +1,8 @@
 ﻿using System;
 using System.Collections.Specialized;
+using System.Collections.Generic;
 using System.Configuration;
+using System.Configuration.Provider;
 using System.IO;
 using System.Linq.Expressions;
 using System.Web;
@@ -96,7 +98,7 @@ namespace MongoDB.Web.Providers
 	}
 
 	public class MongoSessionStateProvider<T> : SessionStateStoreProviderBase
-		where T : ISessionStateData, new()
+		where T : class, ISessionStateData, new()
     {
 		private MongoCollection<T> _MongoCollection;
         private SessionStateSection _SessionStateSection;
@@ -111,8 +113,10 @@ namespace MongoDB.Web.Providers
 		private string _LockIdField;
 		private string _LockedField;
 		private string _ExpiresField;
-		private string _SessionStateActionsField;
 		private string _LockDateField;
+		private string _SessionStateActionsField;
+		private string _SessionItemsField;
+		private SafeMode _SafeMode = null;
 
         public override SessionStateStoreData CreateNewStoreData(HttpContext context, int timeout)
         {
@@ -161,6 +165,7 @@ namespace MongoDB.Web.Providers
 			_ExpiresField = MapBsonMember(t => t.Expires);
 			_LockDateField = MapBsonMember(t => t.LockDate);
 			_SessionStateActionsField = MapBsonMember(t => t.SessionStateActions);
+			_SessionItemsField = MapBsonMember(t => t.SessionStateItems);
 
 			// Ideally, we'd just use the object's bson id - however, serialization gets a bit wonky
 			// when trying to have an Id property which isn't a simple type in the base class
@@ -183,6 +188,19 @@ namespace MongoDB.Web.Providers
 				}
 			}
 
+			// Initialise safe mode options. Defaults to Safe Mode=true, fsynch=false, w=0 (replicas to write to before returning)
+			bool safeModeEnabled = true;
+
+			bool fsync = _MongoWebSection.FSync;
+			if (config["fsync"] != null)
+				bool.TryParse(config["fsync"], out fsync);
+
+			int replicasToWrite = _MongoWebSection.ReplicasToWrite;
+			if ((config["replicasToWrite"] != null) && (!int.TryParse(config["replicasToWrite"], out replicasToWrite)))
+				throw new ProviderException("replicasToWrite must be a valid integer");
+
+			_SafeMode = SafeMode.Create(safeModeEnabled, fsync, replicasToWrite);
+
             base.Initialize(name, config);
         }
 
@@ -195,22 +213,27 @@ namespace MongoDB.Web.Providers
 			var query = LookupQuery(id, lockId);
 
 			var newExpires = DateTime.UtcNow.Add(_SessionStateSection.Timeout);
-			T session;
-			if (_Cache.TryGetValue(id, out session))
+			var update = Update.Set(_ExpiresField, newExpires).Set(_LockedField, false);
+
+			T session, lockObj = _Cache.TryGetValue(id, out session) ? session : new T();
+			lock (lockObj)
 			{
-				lock (session)
+				var result = _MongoCollection.Update(query, update, _SafeMode);
+				if ((result.DocumentsAffected != 0) && (session != null))
 				{
+					// update the cache if mongo was updated
+					if (session.LockId != (int?)lockId)
+						throw new InvalidDataException("In-memory cache out of sync with database - should never happen");
+
 					session.Expires = newExpires;
 					session.Locked = false;
 				}
 			}
-			var update = Update.Set(_ExpiresField, newExpires).Set(_LockedField, false);
-            this._MongoCollection.Update(query, update);
         }
 
         public override void RemoveItem(HttpContext context, string id, object lockId, SessionStateStoreData item)
         {
-			this._MongoCollection.Remove(LookupQuery(id, lockId));
+			this._MongoCollection.Remove(LookupQuery(id, lockId), _SafeMode);
 			_Cache.Remove(id);
         }
 
@@ -219,6 +242,9 @@ namespace MongoDB.Web.Providers
 			var query = LookupQuery(id);
 
 			var newExpires = DateTime.UtcNow.Add(_SessionStateSection.Timeout);
+			var update = Update.Set(_ExpiresField, newExpires);
+			_MongoCollection.Update(query, update, _SafeMode);
+
 			T session;
 			if (_Cache.TryGetValue(id, out session))
 			{
@@ -227,8 +253,6 @@ namespace MongoDB.Web.Providers
 					session.Expires = newExpires;
 				}
 			}
-			var update = Update.Set(_ExpiresField, newExpires);
-            this._MongoCollection.Update(query, update);
         }
 
         public override void SetAndReleaseItemExclusive(HttpContext context, string id, SessionStateStoreData item, object lockId, bool newItem)
@@ -239,23 +263,51 @@ namespace MongoDB.Web.Providers
                 {
                     ((SessionStateItemCollection)item.Items).Serialize(binaryWriter);
 
-					var sessionData = new T()
+					if (newItem)
 					{
-						SessionId = id,
-						ApplicationVirtualPath = HostingEnvironment.ApplicationVirtualPath,
-						Created = DateTime.UtcNow,
-						Expires = DateTime.UtcNow.AddMinutes(item.Timeout),
-						LockDate = DateTime.UtcNow,
-						Locked = false,
-						LockId = 0,
-						SessionStateActions = SessionStateActions.None,
-						SessionStateItems = memoryStream.ToArray(),
-						SessionStateItemsCount = item.Items.Count,
-						Timeout = item.Timeout
-					};
+						var sessionData = new T()
+						{
+							SessionId = id,
+							ApplicationVirtualPath = HostingEnvironment.ApplicationVirtualPath,
+							Created = DateTime.UtcNow,
+							Expires = DateTime.UtcNow.AddMinutes(item.Timeout),
+							LockDate = DateTime.UtcNow,
+							Locked = false,
+							LockId = 0,
+							SessionStateActions = SessionStateActions.None,
+							SessionStateItems = memoryStream.ToArray(),
+							SessionStateItemsCount = item.Items.Count,
+							Timeout = item.Timeout
+						};
 
-					this._MongoCollection.Save(sessionData, new SafeMode(true, true));
-					_Cache[id] = sessionData;
+						this._MongoCollection.Save(sessionData, _SafeMode);
+						_Cache[id] = sessionData;
+					}
+					else
+					{
+						var sessionItems = memoryStream.ToArray();
+						var expiration = DateTime.UtcNow.AddMinutes(item.Timeout);
+						
+						var update = Update.Set(_ExpiresField, expiration)
+							.Set(_LockedField, false)
+							.Set(_SessionItemsField, sessionItems);
+
+						T session, lockObj = _Cache.TryGetValue(id, out session) ? session : new T();
+						lock (lockObj)
+						{
+							var result = _MongoCollection.Update(LookupQuery(id, lockId), update, _SafeMode);
+							if ((result.DocumentsAffected != 0) && (session != null))
+							{
+								// Update the cache if mongo was updated
+								if (session.LockId != (int?)lockId)
+									throw new InvalidDataException("In-memory cache out of sync with database - should never happen");
+
+								session.SessionStateItems = sessionItems;
+								session.SessionStateItemsCount = item.Items.Count;
+								session.Expires = expiration;
+							}
+						}
+					}
                 }
             }
         }
@@ -268,61 +320,72 @@ namespace MongoDB.Web.Providers
         #region Private Methods
 
         private SessionStateStoreData GetSessionStateStoreData(bool exclusive, HttpContext context, string id, out bool locked, out TimeSpan lockAge, out object lockId, out SessionStateActions actions)
-        {
+		{
+			// Use the same timestamp for all operations, for consistency
+			var now = DateTime.UtcNow;
+
             actions = SessionStateActions.None;
             lockAge = TimeSpan.Zero;
-            locked = false;
-            lockId = null;
 
 			var lookupQuery = LookupQuery(id);
 			T session;
 			if (!_Cache.TryGetValue(id, out session))
 			{
-				session = this._MongoCollection.FindOneAs<T>(lookupQuery);
+				session = _MongoCollection.FindOneAs<T>(lookupQuery);
 				if (session != null)
 					_Cache[id] = session;
 			}
 
-            if (session == null)
-            {
-                locked = false;
-            }
-            else if (session.Expires <= DateTime.UtcNow)
-            {
-                locked = false;
-				this._MongoCollection.Remove(lookupQuery);
-				_Cache.Remove(session.SessionId);
-            }
-            else if (session.Locked)
-            {
-                lockAge = DateTime.UtcNow.Subtract(session.LockDate);
-                locked = true;
-                lockId = session.LockId;
-            }
-            else
-            {
-                locked = false;
-                lockId = session.LockId;
-				actions = session.SessionStateActions;
-            }
+			if (session != null)
+			{
+				if (session.Expires <= now)
+				{
+					session = null;
+					_MongoCollection.Remove(lookupQuery, _SafeMode);
+					_Cache.Remove(new KeyValuePair<string, T>(session.SessionId, session));
+				}
+				else if (session.Locked)
+					lockAge = now.Subtract(session.LockDate);
+				else
+					actions = session.SessionStateActions;
+			}
 
+			locked = (session != null) && session.Locked;
+			lockId = (session != null) ? (object)session.LockId : null;
             if (exclusive && (session != null))
             {
-                actions = SessionStateActions.None;
+				var updatedActions = SessionStateActions.None;
+				int newLockId = session.LockId + 1;
+
+				var updateQuery = Query.And(
+					Query.EQ(_ApplicationVirtualPathField, HostingEnvironment.ApplicationVirtualPath),
+					Query.EQ(_IdField, newLockId),
+					Query.EQ(_LockedField, false),
+					Query.GT(_ExpiresField, now));
+
+				var update = Update.Set(_LockDateField, now)
+					.Set(_LockIdField, newLockId)
+					.Set(_LockedField, true)
+					.Set(_SessionStateActionsField, updatedActions);
 
 				lock (session)
 				{
-					session.LockDate = DateTime.UtcNow;
-					session.LockId++;
-					session.Locked = true;
-					session.SessionStateActions = SessionStateActions.None;
-				}
+					var result = _MongoCollection.Update(updateQuery, update, _SafeMode);
+					bool acquiredLock = result.DocumentsAffected != 0;
 
-				var update = Update.Set(_LockDateField, session.LockDate)
-					.Set(_LockIdField, session.LockId)
-					.Set(_LockedField, session.Locked)
-					.Set(_SessionStateActionsField, session.SessionStateActions);
-                this._MongoCollection.Update(lookupQuery, update);
+					if (acquiredLock)
+					{
+						lockId = newLockId;
+						actions = updatedActions;
+
+						session.LockDate = now;
+						session.LockId = newLockId;
+						session.Locked = true;
+						session.SessionStateActions = updatedActions;
+					}
+					else
+						locked = true;
+				}
             }
 
             if ((actions == SessionStateActions.InitializeItem) || (session == null))
