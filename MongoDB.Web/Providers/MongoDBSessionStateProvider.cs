@@ -215,8 +215,9 @@ namespace MongoDB.Web.Providers
 			var newExpires = DateTime.UtcNow.Add(_SessionStateSection.Timeout);
 			var update = Update.Set(_ExpiresField, newExpires).Set(_LockedField, false);
 
-			T session, lockObj = _Cache.TryGetValue(id, out session) ? session : new T();
-			lock (lockObj)
+			T session;
+			_Cache.TryGetValue(id, out session);
+			lock (session ?? new object())
 			{
 				var result = _MongoCollection.Update(query, update, _SafeMode);
 				if ((result.DocumentsAffected != 0) && (session != null))
@@ -234,6 +235,7 @@ namespace MongoDB.Web.Providers
         public override void RemoveItem(HttpContext context, string id, object lockId, SessionStateStoreData item)
         {
 			this._MongoCollection.Remove(LookupQuery(id, lockId), _SafeMode);
+			// We don't care about consistency - even if the lockId doesn't match, the cache will simply be cleared & reloaded
 			_Cache.Remove(id);
         }
 
@@ -292,9 +294,12 @@ namespace MongoDB.Web.Providers
 							.Set(_LockedField, false)
 							.Set(_SessionItemsField, sessionItems);
 
-						T session, lockObj = _Cache.TryGetValue(id, out session) ? session : new T();
-						lock (lockObj)
+						T session;
+						_Cache.TryGetValue(id, out session);
+						lock (session ?? new object())
 						{
+
+
 							var result = _MongoCollection.Update(LookupQuery(id, lockId), update, _SafeMode);
 							if ((result.DocumentsAffected != 0) && (session != null))
 							{
@@ -413,10 +418,11 @@ namespace MongoDB.Web.Providers
 
 		private IMongoQuery LookupQuery(string id, object lockId)
 		{
+			int lockIdInt = (int?)lockId ?? 0;
 			return Query.And(
 				Query.EQ(_ApplicationVirtualPathField, HostingEnvironment.ApplicationVirtualPath),
 				Query.EQ(_IdField, id),
-				Query.EQ(_LockIdField, lockId.ToString()));
+				Query.EQ(_LockIdField, lockIdInt));
 		}
 
 		private string MapBsonMember<TReturn>(Expression<Func<T, TReturn>> expression)
