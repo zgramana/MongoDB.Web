@@ -135,6 +135,8 @@ namespace MongoDB.Web.Providers
 				Locked = false,
 				LockId = 0,
 				SessionStateActions = SessionStateActions.InitializeItem,
+				SessionStateItems = new byte[0],
+				SessionStateItemsCount = 0,
 				Timeout = timeout
 			};
 
@@ -415,7 +417,7 @@ namespace MongoDB.Web.Providers
 			else if (session == null)
 				return null;
 
-            using (var memoryStream = new MemoryStream(session.SessionStateItems))
+            using (var memoryStream = new MemoryStream(session.SessionStateItems ?? new byte[0]))
             {
                 var sessionStateItems = new SessionStateItemCollection();
 
