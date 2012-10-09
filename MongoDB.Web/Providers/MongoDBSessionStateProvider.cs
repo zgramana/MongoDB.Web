@@ -125,7 +125,24 @@ namespace MongoDB.Web.Providers
 
         public override void CreateUninitializedItem(HttpContext context, string id, int timeout)
         {
-            throw new NotImplementedException();
+			var sessionData = new T()
+			{
+				SessionId = id,
+				ApplicationVirtualPath = HostingEnvironment.ApplicationVirtualPath,
+				Created = DateTime.UtcNow,
+				Expires = DateTime.UtcNow.AddMinutes(timeout),
+				LockDate = DateTime.UtcNow,
+				Locked = false,
+				LockId = 0,
+				SessionStateActions = SessionStateActions.InitializeItem,
+				Timeout = timeout
+			};
+
+			var result = this._MongoCollection.Insert(sessionData, _SafeMode);
+			if (! result.Ok)
+				throw new Exception(result.ErrorMessage);
+
+			_Cache[id] = sessionData;
         }
 
         public override void Dispose()
@@ -345,9 +362,9 @@ namespace MongoDB.Web.Providers
 			{
 				if (session.Expires <= now)
 				{
-					session = null;
 					_MongoCollection.Remove(lookupQuery, _SafeMode);
 					_Cache.Remove(new KeyValuePair<string, T>(session.SessionId, session));
+					session = null;
 				}
 				else if (session.Locked)
 					lockAge = now.Subtract(session.LockDate);
@@ -359,12 +376,12 @@ namespace MongoDB.Web.Providers
 			lockId = (session != null) ? (object)session.LockId : null;
             if (exclusive && (session != null))
             {
-				var updatedActions = SessionStateActions.None;
+				var updatedActions = actions = SessionStateActions.None;
 				int newLockId = session.LockId + 1;
 
 				var updateQuery = Query.And(
 					Query.EQ(_ApplicationVirtualPathField, HostingEnvironment.ApplicationVirtualPath),
-					Query.EQ(_IdField, newLockId),
+					Query.EQ(_IdField, id),
 					Query.EQ(_LockedField, false),
 					Query.GT(_ExpiresField, now));
 
@@ -393,10 +410,10 @@ namespace MongoDB.Web.Providers
 				}
             }
 
-            if ((actions == SessionStateActions.InitializeItem) || (session == null))
-            {
+            if (actions == SessionStateActions.InitializeItem)
                 return CreateNewStoreData(context, _SessionStateSection.Timeout.Minutes);
-            }
+			else if (session == null)
+				return null;
 
             using (var memoryStream = new MemoryStream(session.SessionStateItems))
             {
