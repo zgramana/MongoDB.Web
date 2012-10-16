@@ -242,8 +242,8 @@ namespace MongoDB.Web.Providers
 				if ((result.DocumentsAffected != 0) && (session != null))
 				{
 					// update the cache if mongo was updated
-					if (session.LockId != (int?)lockId)
-						throw new InvalidDataException("In-memory cache out of sync with database - should never happen");
+					if ((lockId != null) && (session.LockId != (int)lockId))
+						throw new InvalidDataException(String.Format("Cache out of sync with Mongo. Expected {0}, was {1}", lockId, session.LockId));
 
 					session.Expires = newExpires;
 					session.Locked = false;
@@ -317,14 +317,12 @@ namespace MongoDB.Web.Providers
 						_Cache.TryGetValue(id, out session);
 						lock (session ?? new object())
 						{
-
-
 							var result = _MongoCollection.Update(LookupQuery(id, lockId), update, _SafeMode);
 							if ((result.DocumentsAffected != 0) && (session != null))
 							{
 								// Update the cache if mongo was updated
-								if (session.LockId != (int?)lockId)
-									throw new InvalidDataException("In-memory cache out of sync with database - should never happen");
+								if ((lockId != null) && (session.LockId != (int)lockId))
+									throw new InvalidDataException(String.Format("Cache out of sync with Mongo. Expected {0}, was {1}", lockId, session.LockId));
 
 								session.SessionStateItems = sessionItems;
 								session.SessionStateItemsCount = item.Items.Count;
