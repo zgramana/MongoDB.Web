@@ -357,7 +357,12 @@ namespace MongoDB.Web.Providers
 			{
 				session = _MongoCollection.FindOneAs<T>(lookupQuery);
 				if (session != null)
-					_Cache[id] = session;
+				{
+					// We need to make sure that this method has a reference to the instance in the cache,
+					// in case there's a race condition when the session is loaded from mongo
+					if (!_Cache.TryAdd(id, session))
+						session = _Cache[id];
+				}
 			}
 
 			if (session != null)
