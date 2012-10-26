@@ -45,14 +45,14 @@
   </ItemGroup>
   <ItemGroup>
     <Reference Include="CommonCore.Base, Version=1.0.0.1, Culture=neutral, processorArchitecture=MSIL">
-      <HintPath>..\packages\CommonCore.1.0.0.5\lib\net35\CommonCore.Base.dll</HintPath>
+      <HintPath>..\packages\CommonCore.1.0.0.6\lib\net35\CommonCore.Base.dll</HintPath>
     </Reference>
-    <Reference Include="CommonCore.Cache, Version=1.0.0.2, Culture=neutral, processorArchitecture=MSIL">
+    <Reference Include="CommonCore.Cache, Version=1.0.0.3, Culture=neutral, processorArchitecture=MSIL">
       <SpecificVersion>False</SpecificVersion>
-      <HintPath>..\packages\CommonCore.1.0.0.5\lib\net35\CommonCore.Cache.dll</HintPath>
+      <HintPath>..\packages\CommonCore.1.0.0.6\lib\net35\CommonCore.Cache.dll</HintPath>
     </Reference>
     <Reference Include="CommonCore.Collections, Version=1.0.0.0, Culture=neutral, processorArchitecture=MSIL">
-      <HintPath>..\packages\CommonCore.1.0.0.5\lib\net35\CommonCore.Collections.dll</HintPath>
+      <HintPath>..\packages\CommonCore.1.0.0.6\lib\net35\CommonCore.Collections.dll</HintPath>
     </Reference>
     <Reference Include="MongoDB.Bson, Version=1.6.0.4624, Culture=neutral, PublicKeyToken=f686731cfb9cc103, processorArchitecture=MSIL">
       <SpecificVersion>False</SpecificVersion>
