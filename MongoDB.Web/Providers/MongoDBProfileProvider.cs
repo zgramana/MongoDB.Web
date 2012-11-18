@@ -85,6 +85,23 @@ namespace MongoDB.Web.Providers
             var query = Query.And(Query.EQ("ApplicationName", this.ApplicationName), Query.EQ("Username", username));
             var bsonDocument = this.mongoCollection.FindOneAs<BsonDocument>(query);
 
+
+            // create new if not exists
+            if (bsonDocument == null)
+            {
+                bsonDocument = new BsonDocument
+                                   {    
+                                        { "_id", Guid.NewGuid() },
+                                        {"ApplicationName", this.ApplicationName},
+                                        {"Username", username},
+                                        {"IsAnonymous", false},
+                                        {"LastActivityDate", DateTime.Now},
+                                        {"LastUpdatedDate", DateTime.Now}
+                                    };
+
+                this.mongoCollection.Insert(bsonDocument);
+            }
+
             foreach (SettingsProperty settingsProperty in collection)
             {
                 var settingsPropertyValue = new SettingsPropertyValue(settingsProperty);
