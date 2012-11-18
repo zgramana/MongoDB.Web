@@ -169,7 +169,7 @@ namespace MongoDB.Web.Providers
             };
 
             mergeDocument.Add(values as IDictionary<string, object>);
-            bsonDocument.Merge(mergeDocument);
+            bsonDocument.Merge(mergeDocument, true);
 
             this.mongoCollection.Save(bsonDocument);
         }
