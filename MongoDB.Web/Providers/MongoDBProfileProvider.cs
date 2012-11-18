@@ -102,19 +102,30 @@ namespace MongoDB.Web.Providers
                 this.mongoCollection.Insert(bsonDocument);
             }
 
+            // loop the property values, either from mongo or from defaults
             foreach (SettingsProperty settingsProperty in collection)
             {
                 var settingsPropertyValue = new SettingsPropertyValue(settingsProperty);
-                settingsPropertyValueCollection.Add(settingsPropertyValue);
 
-                var value = bsonDocument[settingsPropertyValue.Name].RawValue;
-
-                if (value != null)
+                // exists in mongo
+                if (bsonDocument.Contains(settingsPropertyValue.Name))
                 {
-                    settingsPropertyValue.PropertyValue = value;
-                    settingsPropertyValue.IsDirty = false;
-                    settingsPropertyValue.Deserialized = true;
+                    var value = bsonDocument[settingsPropertyValue.Name].RawValue;
+                    if (value != null)
+                    {
+                        settingsPropertyValue.PropertyValue = value;
+                    }
                 }
+                else if (!string.IsNullOrEmpty(settingsProperty.DefaultValue.ToString()))
+                {
+                    // property has specified default value in Web.Config
+                    // TODO: property types other than string needs some more work. Gives cast exception when accessed dynamic w/o having been set first
+                    // 
+                    settingsPropertyValue.PropertyValue = settingsProperty.DefaultValue;
+                }
+                settingsPropertyValue.Deserialized = true;
+                settingsPropertyValue.IsDirty = false;
+                settingsPropertyValueCollection.Add(settingsPropertyValue);
             }
 
             var update = Update.Set("LastActivityDate", DateTime.Now);
