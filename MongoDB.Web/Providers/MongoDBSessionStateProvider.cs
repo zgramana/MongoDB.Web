@@ -208,7 +208,7 @@ namespace MongoDB.Web.Providers
 			}
 
 			// Initialise safe mode options. Defaults to Safe Mode=true, fsynch=false, w=0 (replicas to write to before returning)
-			bool safeModeEnabled = true;
+			bool safeModeEnabled = false;
 
 			bool fsync = _MongoWebSection.FSync;
 			if (config["fsync"] != null)

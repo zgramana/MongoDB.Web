@@ -344,10 +344,10 @@ namespace MongoDB.Web.Providers
             }
 
             this.mongoCollection = MongoDatabase.Create(ConnectionHelper.GetDatabaseConnectionString(config)).GetCollection(config["collection"] ?? "Users");
-            this.mongoCollection.EnsureIndex("ApplicationName");
-            this.mongoCollection.EnsureIndex("ApplicationName", "Email");
-            this.mongoCollection.EnsureIndex("ApplicationName", "Username");
-            this.mongoCollection.EnsureIndex(IndexKeys.Ascending("ApplicationName", "Username"), IndexOptions.SetUnique(true).SetName("UniqueApplicationNameUserName"));
+            ////this.mongoCollection.EnsureIndex("ApplicationName");
+            ////this.mongoCollection.EnsureIndex("ApplicationName", "Email");
+            ////this.mongoCollection.EnsureIndex("ApplicationName", "Username");
+            ////this.mongoCollection.EnsureIndex(IndexKeys.Ascending("ApplicationName", "Username"), IndexOptions.SetUnique(true).SetName("UniqueApplicationNameUserName"));
 
             base.Initialize(name, config);
         }
